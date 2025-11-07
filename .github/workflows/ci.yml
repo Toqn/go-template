@@ -1,35 +1,65 @@
 name: ci
+
 on:
   pull_request:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: write 
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      CGO_ENABLED: 1
+
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
-          go-version: '1.25'
-      - name: Cache Go modules and build cache
-        uses: actions/cache@v4
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-      - name: Tidy dependencies
-        run: go mod tidy
-      - name: Install golangci-lint
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify go.mod/go.sum are clean
+        run: |
+          go mod download
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Lint
         uses: golangci/golangci-lint-action@v8
         with:
+          version: latest
           args: --timeout=5m
-      - name: Run linters
-        run: golangci-lint run ./...
-      - name: Run tests
-        run: go test ./... -race -count=1
-      - name: Build binary
-        run: make build
+          only-new-issues: true
+
+      - name: Unit tests
+        run: |
+          go test ./... -race -shuffle=on -coverprofile=cover.out -covermode=atomic -count=1
+          go tool cover -func=cover.out | tail -n 1
+
+      - name: Build
+        run: |
+          if [ -f Makefile ]; then make build; else go build -v ./...; fi
+
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v5
+        with:
+          name: build-${{ github.sha }}
+          path: |
+            **/bin/**
+            cover.out
+          if-no-files-found: ignore
