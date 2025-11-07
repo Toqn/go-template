@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/toqn/phito-backend/internal/platform/config"
-	plog "github.com/toqn/phito-backend/internal/platform/log"
-	"github.com/toqn/phito-backend/internal/platform/trace"
+	"github.com/toqn/go-template/internal/platform/config"
+	plog "github.com/toqn/go-template/internal/platform/log"
+	"github.com/toqn/go-template/internal/platform/trace"
 )
 
 func main() {

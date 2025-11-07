@@ -1,4 +1,4 @@
-module github.com/toqn/phito-backend
+module github.com/toqn/go-template
 
 go 1.25.3
 
