@@ -1,0 +1,10 @@
+/bin
+/dist
+/.idea
+/.vscode
+/go.work
+coverage.out
+
+# OS-specific files
+.DS_Store
+*~

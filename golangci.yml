@@ -1,0 +1,55 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - gosimple
+    - ineffassign
+    - gofmt
+    - goimports
+    - gocyclo
+    - revive
+    - depguard
+    - exportloopref
+    - nakedret
+    - unparam
+    - misspell
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  depguard:
+    rules:
+      core-imports:
+        files:
+          - internal/core/**/*
+        allow:
+          - "^context$"
+          - "^errors$"
+          - "^time$"
+          - "^fmt$"
+          - "^strconv$"
+          - "^strings$"
+          - "^sync$"
+          - "^github.com/toqn/phito-backend/api/"
+          - "^github.com/toqn/phito-backend/internal/ports$"
+      adapters-imports:
+        files:
+          - internal/adapters/**/*
+        deny:
+          - pkg: "^github.com/toqn/phito-backend/internal/core"
+            desc: "adapters must not depend on core"
+      transport-imports:
+        files:
+          - internal/transport/**/*
+        deny:
+          - pkg: "^github.com/toqn/phito-backend/internal/adapters"
+            desc: "composition belongs in cmd/, not transport"
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
