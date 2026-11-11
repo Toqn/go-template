@@ -1,4 +1,6 @@
-package log
+// Package logx configures structured logging. It is named logx rather than
+// log so it does not shadow the standard library package.
+package logx
 
 import (
 	"log/slog"
@@ -23,7 +25,7 @@ func New(level string) *slog.Logger {
 	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level:     lv,
 		AddSource: false,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 			// shorten time to RFC3339 without monotonic junk
 			if a.Key == slog.TimeKey {
 				if t := a.Value.Time(); !t.IsZero() {

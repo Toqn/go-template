@@ -1,0 +1,62 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  # "standard" = errcheck, govet, ineffassign, staticcheck (incl. gosimple/stylecheck), unused.
+  default: standard
+  enable:
+    - depguard
+    - gocyclo
+    - misspell
+    - nakedret
+    - revive
+    - unparam
+  settings:
+    gocyclo:
+      min-complexity: 15
+    depguard:
+      # depguard v2 matches imports by prefix; a trailing "$" means exact match.
+      # File globs are matched against absolute paths, hence the leading "**/".
+      rules:
+        core-imports:
+          list-mode: strict
+          files:
+            - "**/internal/core/**"
+          allow:
+            - context
+            - errors
+            - time
+            - fmt
+            - strconv
+            - strings
+            - sync
+            - github.com/toqn/go-template/api
+            - github.com/toqn/go-template/internal/ports$
+        adapters-imports:
+          files:
+            - "**/internal/adapters/**"
+          deny:
+            - pkg: github.com/toqn/go-template/internal/core
+              desc: adapters must not depend on core
+        transport-imports:
+          files:
+            - "**/internal/transport/**"
+          deny:
+            - pkg: github.com/toqn/go-template/internal/adapters
+              desc: composition belongs in cmd/, not transport
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/toqn/go-template
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

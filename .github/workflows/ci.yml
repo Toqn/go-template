@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write 
+  pull-requests: read # only-new-issues reads the PR diff
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -19,30 +19,26 @@ jobs:
     timeout-minutes: 20
 
     env:
-      CGO_ENABLED: 1
+      CGO_ENABLED: 1 # required by -race
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: go.mod
 
-      - name: Verify go.mod/go.sum are clean
-        run: |
-          go mod download
-          git diff --exit-code -- go.mod go.sum
+      - name: Verify go.mod/go.sum are tidy
+        run: go mod tidy -diff
 
       - name: Lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
-          args: --timeout=5m
+          version: v2.5.0 # keep in sync with Makefile
           only-new-issues: true
 
       - name: Unit tests
@@ -51,15 +47,13 @@ jobs:
           go tool cover -func=cover.out | tail -n 1
 
       - name: Build
-        run: |
-          if [ -f Makefile ]; then make build; else go build -v ./...; fi
+        run: make build
 
       - name: Upload build artifacts
-        if: success()
         uses: actions/upload-artifact@v5
         with:
           name: build-${{ github.sha }}
           path: |
-            **/bin/**
+            bin/
             cover.out
-          if-no-files-found: ignore
+          if-no-files-found: error

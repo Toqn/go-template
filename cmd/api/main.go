@@ -1,83 +1,157 @@
+// Command api is the HTTP entrypoint and composition root of the service.
 package main
 
 import (
 	"context"
-	"log"
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
 	"log/slog"
-
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	v1 "github.com/toqn/go-template/api/v1"
 	"github.com/toqn/go-template/internal/platform/config"
-	plog "github.com/toqn/go-template/internal/platform/log"
+	"github.com/toqn/go-template/internal/platform/logx"
 	"github.com/toqn/go-template/internal/platform/trace"
 )
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
+	if err := run(); err != nil {
+		slog.Error("fatal", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		return fmt.Errorf("config: %w", err)
 	}
 
-	logger := plog.New(cfg.LogLevel)
-	plog.SetDefault(logger)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, end := trace.Start(r.Context(), "healthz")
-		defer end(nil)
-		plog.FromContext(ctx).Info("healthz check")
-		w.WriteHeader(http.StatusOK)
-	})
-
-	muxWithMiddleware := requestLogger(mux)
+	logger := logx.New(cfg.LogLevel)
+	logx.SetDefault(logger)
 
 	srv := &http.Server{
-		Addr:         cfg.HTTPAddr,
-		Handler:      muxWithMiddleware,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              cfg.HTTPAddr,
+		Handler:           requestLogger(routes()),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
-
-	go func() {
-		logger.Info("starting server", "addr", srv.Addr, "stage", cfg.Stage)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("could not start server", "error", err)
-			os.Exit(1)
-		}
-	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	<-ctx.Done()
+	defer stop()
 
-	stop()
+	errCh := make(chan error, 1)
+	go func() {
+		logger.Info("starting server", "addr", srv.Addr, "stage", cfg.Stage, "version", version)
+		errCh <- srv.ListenAndServe()
+	}()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	select {
+	case err := <-errCh:
+		// ListenAndServe only returns early on failure (e.g. port in use).
+		return fmt.Errorf("listen: %w", err)
+	case <-ctx.Done():
+	}
+	stop() // a second signal now kills the process immediately
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("could not gracefully shutdown server", "error", err)
-	} else {
-		logger.Info("server stopped")
+		return fmt.Errorf("graceful shutdown: %w", err)
 	}
+	logger.Info("server stopped")
+	return nil
 }
 
-func newReqID() string {
-	// TODO keep trivial; swap later for ULIDs
-	return time.Now().UTC().Format("20060102T150405.000000000Z07:00")
+func routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", healthz)
+	return mux
 }
 
+func healthz(w http.ResponseWriter, r *http.Request) {
+	_, end := trace.Start(r.Context(), "healthz")
+	defer end(nil)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v1.Health{Status: "ok"})
+}
+
+const maxReqIDLen = 128
+
+// validReqID reports whether a client-supplied request id is safe to reuse.
+func validReqID(id string) bool {
+	if id == "" || len(id) > maxReqIDLen {
+		return false
+	}
+	for _, c := range id {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.', c == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// requestLogger assigns each request an id (echoed in X-Request-ID) and logs
+// method, path, status and duration once the request completes. Health checks
+// are logged at debug level so probes don't flood the logs.
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		reqID := r.Header.Get("X-Request-ID")
-		if reqID == "" {
-			reqID = newReqID()
+		if !validReqID(reqID) {
+			reqID = rand.Text()
 		}
-		ctx := plog.WithRequestID(r.Context(), reqID)
-		slog.Info("request_start", "method", r.Method, "path", r.URL.Path, "req_id", reqID)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		w.Header().Set("X-Request-ID", reqID)
+
+		ctx := logx.WithRequestID(r.Context(), reqID)
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r.WithContext(ctx))
+
+		level := slog.LevelInfo
+		if r.URL.Path == "/healthz" {
+			level = slog.LevelDebug
+		}
+		logx.FromContext(ctx).Log(ctx, level, "request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"duration_ms", float64(time.Since(start).Microseconds())/1000,
+		)
 	})
 }
+
+// statusRecorder captures the response status code for logging.
+type statusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if !s.wroteHeader {
+		s.status = code
+		s.wroteHeader = true
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	s.wroteHeader = true
+	return s.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }

@@ -3,7 +3,7 @@
 /.idea
 /.vscode
 /go.work
-coverage.out
+cover.out
 
 # OS-specific files
 .DS_Store
